@@ -1,173 +1,29 @@
 <?php
-require_once __DIR__ . '/includes/fungsi.php';
+require_once __DIR__ . '/includes/bootstrap.php';
+wajib_izin('kartu_stok');
+$halaman = 'kartu_stok';
 $judul = 'Kartu Stok';
-
-$data = [];
-$stok = [];
-$barang = [];
-$error = '';
-
-$idBarang = filter_input(INPUT_GET, 'barang', FILTER_VALIDATE_INT);
-
-try {
-
-    // Menghubungkan PHP dengan database MySQL.
-    $db = koneksi();
-
-    // Mengambil daftar barang dari View.
-    $barang = $db->query(
-        'SELECT idbarang, nama
-         FROM v_barang
-         ORDER BY nama'
-    )->fetchAll();
-
-    // Mengambil sisa stok terakhir setiap barang.
-    // Nilai stock dihitung oleh Trigger ketika INSERT kartu_stok.
-    // PHP hanya membaca hasil perhitungan tersebut.
-    $sqlStok = 'SELECT b.idbarang, b.nama,
-                      COALESCE(
-                          (
-                              SELECT k.stock
-                              FROM v_kartu_stok k
-                              WHERE k.idbarang = b.idbarang
-                              ORDER BY k.idkartu_stok DESC
-                              LIMIT 1
-                          ), 0
-                      ) AS sisa_stok
-               FROM v_barang b
-               ORDER BY b.nama';
-
-    $stok = $db->query('SELECT idbarang,nama,stok_tersedia AS sisa_stok FROM v_barang ORDER BY nama')->fetchAll();
-    $audit=ks_call($db,'CALL sp_audit_kartu_stok()');
-
-    // Menampilkan riwayat berdasarkan barang yang dipilih.
-    if (
-        $idBarang !== false &&
-        $idBarang !== null &&
-        $idBarang > 0
-    ) {
-
-        // Stored Procedure dari Modul 9.
-        $stmt = $db->prepare(
-            'CALL sp_riwayat_stok_per_barang(:id)'
-        );
-
-        $stmt->bindValue(':id', $idBarang, PDO::PARAM_INT);
-        $stmt->execute();
-
-        $data = $stmt->fetchAll();
-        $stmt->closeCursor();
-
-    } else {
-
-        // Menampilkan seluruh riwayat melalui View.
-        $sql = 'SELECT idkartu_stok, idbarang,
-                       jenis_transaksi, masuk, keluar,
-                       stock, created_at, sumber_transaksi, idtransaksi
-                FROM v_kartu_stok
-                ORDER BY idkartu_stok DESC';
-
-        $data = $db->query($sql)->fetchAll();
-    }
-
-} catch (PDOException $e) {
-
-    $error = $e->getMessage();
-}
-
+$subjudul = 'Riwayat stok masuk dan keluar yang dihasilkan otomatis oleh Trigger.';
+$barangFilter = isset($_GET['barang']) && ctype_digit((string)$_GET['barang']) ? (int)$_GET['barang'] : 0;
+$sourceFilter = in_array($_GET['sumber'] ?? '', ['PENERIMAAN', 'PENJUALAN', 'RETUR'], true) ? $_GET['sumber'] : '';
+$barangOptions = array_column(db_all('SELECT idbarang, nama FROM v_barang ORDER BY nama'), 'nama', 'idbarang');
+$where = [];
+$parameters = [];
+if ($barangFilter) { $where[] = 'idbarang = ?'; $parameters[] = $barangFilter; }
+if ($sourceFilter) { $where[] = 'sumber_transaksi = ?'; $parameters[] = $sourceFilter; }
+$sql = 'SELECT * FROM v_kartu_stok' . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY idkartu_stok DESC LIMIT 500';
+$rows = db_all($sql, $parameters);
+$masuk = 0; $keluar = 0;
+foreach ($rows as $r) { $masuk += (int)$r['masuk']; $keluar += (int)$r['keluar']; }
 require __DIR__ . '/includes/header.php';
 ?>
-
-<div class="atas-halaman">
-    <h1>Kartu Stok</h1>
-
-    <a class="tombol" href="index.php">
-        Kembali
-    </a>
-</div>
-
-
-
-
-<?php if ($error !== ''): ?>
-
-    <?php pesan_error($error); ?>
-
-<?php else: ?>
-
-    <h2>1. Sisa Stok Per Barang</h2>
-
-    
-
-    <?php
-    tampil_tabel($stok, [
-        'idbarang' => 'ID Barang',
-        'nama' => 'Nama Barang',
-        'sisa_stok' => 'Sisa Stok'
-    ]);
-    ?>
-
-    
-
-
-    <h2>2. Riwayat Kartu Stok</h2>
-
-    
-
-    <form
-        class="formulir"
-        method="get"
-        action="kartu_stok.php"
-    >
-
-        <div>
-            <label for="barang">
-                Pilih Barang
-            </label>
-
-            <select name="barang" id="barang">
-
-                <option value="">Semua Barang</option>
-
-                <?php foreach ($barang as $b): ?>
-
-                    <option
-                        value="<?= (int) $b['idbarang'] ?>"
-                        <?= (int) $idBarang === (int) $b['idbarang'] ? 'selected' : '' ?>
-                    >
-                        <?= aman($b['nama']) ?>
-                    </option>
-
-                <?php endforeach; ?>
-
-            </select>
-        </div>
-
-        <button type="submit">
-            Tampilkan
-        </button>
-
-        <a class="tombol" href="kartu_stok.php">
-            Reset
-        </a>
-
-    </form>
-
-    <?php
-    tampil_tabel($data, [
-        'idkartu_stok' => 'ID Kartu',
-        'idbarang' => 'ID Barang',
-        'jenis_transaksi' => 'Jenis',
-        'sumber_transaksi' => 'Sumber',
-        'idtransaksi' => 'ID Detail',
-        'masuk' => 'Masuk',
-        'keluar' => 'Keluar',
-        'stock' => 'Sisa Stok',
-        'created_at' => 'Tanggal'
-    ]);
-    ?>
-
-<?php endif; ?>
-
-<?php if (!$error): ?><details><summary>Audit Stok</summary><?php tampil_tabel($audit,['nama'=>'Barang','stok_tersedia'=>'Stok','stok_hitung'=>'Masuk - Keluar','stok_terakhir'=>'Catatan terakhir','hasil_audit'=>'Hasil']); ?></details><?php endif; ?>
+<div class="mini-metrics"><div class="mini-metric"><span>Mutasi ditampilkan</span><strong><?= count($rows) ?></strong></div><div class="mini-metric"><span>Total stok masuk</span><strong class="positive">+<?= number_format($masuk,0,',','.') ?></strong></div><div class="mini-metric"><span>Total stok keluar</span><strong class="negative">−<?= number_format($keluar,0,',','.') ?></strong></div></div>
+<section class="surface-card"><div class="card-top"><div><h2>Riwayat mutasi</h2></div></div>
+<form method="get" class="filter-row">
+<?= pilihan_field('barang', 'Barang', [0 => 'Semua barang'] + $barangOptions, $barangFilter, false) ?>
+<?= pilihan_field('sumber', 'Sumber transaksi', ['' => 'Semua sumber', 'PENERIMAAN' => 'Penerimaan', 'PENJUALAN' => 'Penjualan', 'RETUR' => 'Retur'], $sourceFilter, false) ?>
+<button class="btn btn-primary" type="submit"><?= ikon('search',17) ?> Terapkan</button><a href="kartu_stok.php" class="btn btn-outline">Reset</a>
+</form><div class="table-wrap"><table class="data-table"><thead><tr><th>No.</th><th>Waktu</th><th>Barang</th><th>Sumber</th><th>Referensi detail</th><th>Masuk</th><th>Keluar</th><th>Stok setelah transaksi</th></tr></thead><tbody>
+<?php foreach ($rows as $r): ?><tr><td>#<?= (int)$r['idkartu_stok'] ?></td><td><?= e(tanggal($r['created_at'])) ?></td><td><b><?= e($r['nama_barang']) ?></b></td><td><?= status_chip(ucfirst(strtolower($r['sumber_transaksi']))) ?></td><td>#<?= (int)$r['idtransaksi'] ?></td><td class="positive"><?= (int)$r['masuk'] ? '+' . (int)$r['masuk'] : '-' ?></td><td class="negative"><?= (int)$r['keluar'] ? '−' . (int)$r['keluar'] : '-' ?></td><td class="num-strong"><?= (int)$r['stock'] ?></td></tr><?php endforeach; ?>
+</tbody></table></div><?php if (!$rows) echo kosong('Tidak ada mutasi yang cocok dengan filter.'); ?><div class="card-note">Angka masuk/keluar pada ringkasan dihitung dari maksimal 500 riwayat yang ditampilkan. Stok pada kartu adalah saldo setelah mutasi terkait, bukan saldo seluruh barang digabungkan.</div></section>
 <?php require __DIR__ . '/includes/footer.php'; ?>

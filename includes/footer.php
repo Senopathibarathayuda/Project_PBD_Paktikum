@@ -1,4 +1,6 @@
-    </main>
-    <footer class="kaki wadah">Ruang Stok</footer>
+</main>
+</div>
+</div>
+<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
 </body>
 </html>

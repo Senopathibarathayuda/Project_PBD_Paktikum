@@ -1,303 +1,217 @@
 <?php
-require_once __DIR__ . '/../config/koneksi.php';
-
-// Mencegah isi tabel menjadi kode HTML yang dijalankan browser.
-function aman($isi): string
+function e($value): string
 {
-    return htmlspecialchars((string) ($isi ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    return htmlspecialchars((string)($value ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
-
-// Format harga; kolom ppn tidak dianggap nominal karena aturannya belum ditentukan.
-function tampil_nilai($namaKolom, $nilai): string
+function rupiah($value): string
 {
-    if ($nilai === null) {
-        return '-';
-    }
-
-    $kolomUang = [
-        'harga', 'harga_satuan', 'harga_satuan_terima',
-        'sub_total', 'sub_total_terima', 'subtotal',
-        'subtotal_nilai', 'total_nilai', 'harga_jual'
-    ];
-
-    if (in_array($namaKolom, $kolomUang, true) && is_numeric($nilai)) {
-        return 'Rp ' . number_format((float) $nilai, 0, ',', '.');
-    }
-
-    if ($namaKolom === 'status') {
-        return (string)$nilai === '1' ? 'Aktif' : 'Tidak Aktif';
-    }
-    if ($namaKolom === 'status_transaksi') return aman($nilai);
-    if ($namaKolom === 'jenis_transaksi') return $nilai === 'M' ? 'Masuk' : 'Keluar';
-    if ($namaKolom === 'persen' && is_numeric($nilai)) {
-        return aman($nilai) . '%';
-    }
-
-    return aman($nilai);
+    return 'Rp ' . number_format((float)$value, 0, ',', '.');
 }
-
-// Tabel sederhana untuk semua halaman. Kolom tetap ditentukan oleh setiap file PHP.
-function tampil_tabel(array $data, array $kolom, string $kolomDetail = '', array $aksiLain = []): void
+function rupiah_tahan($value): string
 {
-    if (count($data) === 0) {
-        echo '<p class="kosong">Belum ada data untuk ditampilkan.</p>';
-        return;
-    }
-
-    echo '<div class="area-tabel"><table><thead><tr>';
-    foreach ($kolom as $judul) {
-        echo '<th>' . aman($judul) . '</th>';
-    }
-    if ($kolomDetail !== '' || count($aksiLain) > 0) {
-        echo '<th>Aksi</th>';
-    }
-    echo '</tr></thead><tbody>';
-
-    foreach ($data as $baris) {
-        echo '<tr>';
-        foreach ($kolom as $namaKolom => $judul) {
-            echo '<td>' . tampil_nilai($namaKolom, $baris[$namaKolom] ?? null) . '</td>';
-        }
-        if ($kolomDetail !== '' || count($aksiLain) > 0) {
-            echo '<td class="aksi-tabel">';
-            if ($kolomDetail !== '') {
-                $id = (int) ($baris[$kolomDetail] ?? 0);
-                echo '<a class="tombol-kecil" href="?tab=detail&amp;id=' . $id . '">Detail</a> ';
-            }
-            foreach ($aksiLain as $item) {
-                if (!empty($item['draft']) && (string)($baris['status'] ?? $baris['status_induk'] ?? '') !== '0') continue;
-                $idAksi = (int) ($baris[$item['pk']] ?? 0);
-                if ($idAksi > 0) {
-                    if (isset($item['post'])) {
-                        echo '<form method="post" action="'.aman($item['url']).'" style="display:inline" onsubmit="return confirm(\'Hapus detail draft ini?\')"><input type="hidden" name="token" value="'.aman(ks_token()).'"><input type="hidden" name="'.aman($item['post']).'" value="'.$idAksi.'"><button class="tombol-kecil" type="submit">'.aman($item['label']).'</button></form> ';
-                    } else {
-                        $url = $item['url'] . $idAksi;
-                        echo '<a class="tombol-kecil" href="' . aman($url) . '">' . aman($item['label']) . '</a> ';
-                    }
-                }
-            }
-            echo '</td>';
-        }
-        echo '</tr>';
-    }
-    echo '</tbody></table></div>';
+    return $value === null ? '—' : rupiah($value);
 }
-
-function pesan_error(string $teks): void
+function tanggal($value): string
 {
-    echo '<div class="pesan-error">Data belum bisa dibaca. Periksa MySQL Laragon, '
-        . 'nama database, dan View yang dipakai.';
-    echo '<details><summary>Lihat pesan error (untuk belajar di komputer lokal)</summary>'
-        . '<pre>' . aman($teks) . '</pre></details></div>';
+    if (!$value) return '-';
+    return date('d M Y, H:i', strtotime((string)$value));
 }
-
-// Fungsi pendukung form input dan edit.
-// Fungsi tambahan khusus halaman Tambah/Edit. Halaman lama tidak diubah.
-
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
-}
-
-function ks_token(): string
+function db_one(string $sql, array $params = []): ?array
 {
-    if (!isset($_SESSION['ks_token'])) {
-        $_SESSION['ks_token'] = bin2hex(random_bytes(32));
+    global $pdo;
+    $st = $pdo->prepare($sql);
+    $st->execute($params);
+    $result = $st->fetch();
+    $st->closeCursor();
+    return $result ?: null;
+}
+function db_all(string $sql, array $params = []): array
+{
+    global $pdo;
+    $st = $pdo->prepare($sql);
+    $st->execute($params);
+    $result = $st->fetchAll();
+    $st->closeCursor();
+    return $result;
+}
+function db_run(string $sql, array $params = []): int
+{
+    global $pdo;
+    $st = $pdo->prepare($sql);
+    $st->execute($params);
+    $count = $st->rowCount();
+    $st->closeCursor();
+    return $count;
+}
+function panjang_teks(string $text): int
+{
+    return function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : strlen($text);
+}
+function nilai_int($value, int $min = 0): int
+{
+    if (filter_var($value, FILTER_VALIDATE_INT) === false || (int)$value < $min) {
+        throw new RuntimeException('Isi angka bulat minimal ' . $min . '.');
     }
-    return $_SESSION['ks_token'];
+    return (int)$value;
 }
-
-function ks_cek_token(): void
+function nilai_uang($value): int
 {
-    $dikirim = $_POST['token'] ?? '';
-    if (!is_string($dikirim) || !hash_equals(ks_token(), $dikirim)) {
-        throw new RuntimeException('Form tidak valid. Muat ulang halaman, kemudian coba lagi.');
+    return nilai_int($value, 0);
+}
+function nilai_persen($value): string
+{
+    if (!is_scalar($value) || !is_numeric($value) || (float)$value < 0 || (float)$value > 100) {
+        throw new RuntimeException('Persentase harus antara 0 dan 100.');
+    }
+    return number_format((float)$value, 2, '.', '');
+}
+function pilih(string $value, array $allowed): string
+{
+    if (!in_array($value, $allowed, true)) {
+        throw new RuntimeException('Pilihan tidak dikenal.');
+    }
+    return $value;
+}
+function csrf_token(): string
+{
+    if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(24));
+    return $_SESSION['csrf'];
+}
+function csrf_field(): string
+{
+    return '<input type="hidden" name="csrf" value="' . e(csrf_token()) . '">';
+}
+function validasi_csrf(): void
+{
+    if (!hash_equals(csrf_token(), (string)($_POST['csrf'] ?? ''))) {
+        throw new RuntimeException('Sesi formulir tidak valid. Refresh halaman, lalu ulangi.');
     }
 }
-
-function ks_ke(string $url): void
+function flash(string $type, string $message): void
 {
-    header('Location: ' . $url, true, 303);
+    $_SESSION['flash'] = ['type' => $type, 'message' => $message];
+}
+function flash_tampil(): string
+{
+    if (empty($_SESSION['flash'])) return '';
+    $flash = $_SESSION['flash'];
+    unset($_SESSION['flash']);
+    $cls = $flash['type'] === 'error' ? 'danger' : 'success';
+    return '<div class="notice notice-' . $cls . '" role="status">' . e($flash['message']) . '</div>';
+}
+function pergi(string $url): never
+{
+    header('Location: ' . $url);
     exit;
 }
-
-function ks_id($nilai): int
+function user_aktif(): ?array
 {
-    $nilai = (string) ($nilai ?? '');
-    if (!preg_match('/^[1-9][0-9]*$/', $nilai) || strlen($nilai) > 18) {
-        throw new InvalidArgumentException('ID tidak valid.');
-    }
-    $id = (int) $nilai;
-    if ($id < 1) {
-        throw new InvalidArgumentException('ID harus lebih dari 0.');
-    }
-    return $id;
+    return $_SESSION['auth'] ?? null;
 }
-
-function ks_int($nilai, string $nama, int $minimal = 0, int $maksimal = 2147483647): int
+function wajib_login(): void
 {
-    $nilai = trim((string) ($nilai ?? ''));
-    if (!preg_match('/^(0|[1-9][0-9]*)$/', $nilai) || strlen($nilai) > 10) {
-        throw new InvalidArgumentException($nama . ' harus berupa bilangan bulat positif atau nol.');
-    }
-    $hasil = (int) $nilai;
-    if ($hasil < $minimal || $hasil > $maksimal) {
-        throw new InvalidArgumentException($nama . ' harus di antara ' . $minimal . ' dan ' . $maksimal . '.');
-    }
-    return $hasil;
+    if (!user_aktif()) pergi('login.php');
 }
-
-function ks_teks($nilai, string $nama, int $maksimum, bool $wajib = true): string
+function role_sekarang(): string
 {
-    $hasil = trim((string) ($nilai ?? ''));
-    $panjang = function_exists('mb_strlen') ? mb_strlen($hasil, 'UTF-8') : strlen($hasil);
-    if (($wajib && $hasil === '') || $panjang > $maksimum) {
-        throw new InvalidArgumentException($nama . ' wajib diisi dan maksimal ' . $maksimum . ' karakter.');
-    }
-    return $hasil;
+    return strtolower(trim((string)(user_aktif()['nama_role'] ?? '')));
 }
-
-function ks_persen($nilai): float
+function izin(string $halaman, bool $ubah = false): bool
 {
-    $nilai = trim((string) ($nilai ?? ''));
-    if (!preg_match('/^[0-9]+(?:\.[0-9]{1,2})?$/', $nilai)) {
-        throw new InvalidArgumentException('Margin harus berupa angka, contoh: 10 atau 12.5.');
-    }
-    $angka = (float) $nilai;
-    if ($angka < 0 || $angka > 100) {
-        throw new InvalidArgumentException('Margin harus berada antara 0 sampai 100 persen.');
-    }
-    return $angka;
+    $role = role_sekarang();
+    if ($role === 'super admin') return true;
+    $baca = [
+        'manager' => ['index', 'satuan', 'vendor', 'barang', 'margin_penjualan', 'pengadaan', 'penerimaan', 'penjualan', 'retur', 'kartu_stok'],
+        'petugas gudang' => ['index', 'satuan', 'vendor', 'barang', 'pengadaan', 'penerimaan', 'retur', 'kartu_stok'],
+        'kasir' => ['index', 'barang', 'penjualan', 'kartu_stok'],
+    ];
+    $tulis = [
+        'manager' => ['satuan', 'vendor', 'barang', 'margin_penjualan', 'pengadaan', 'penerimaan', 'penjualan', 'retur'],
+        'petugas gudang' => ['penerimaan', 'retur'],
+        'kasir' => ['penjualan'],
+    ];
+    return in_array($halaman, ($ubah ? $tulis : $baca)[$role] ?? [], true);
 }
-
-function ks_kode($nilai, array $pilihan, string $nama): string
+function wajib_izin(string $halaman, bool $ubah = false): void
 {
-    $nilai = (string) ($nilai ?? '');
-    if (!array_key_exists($nilai, $pilihan)) {
-        throw new InvalidArgumentException($nama . ' tidak dikenal.');
-    }
-    return $nilai;
-}
-
-function ks_jalankan(PDO $db, string $sql, array $parameter = []): PDOStatement
-{
-    // SQL ditulis langsung, tidak memakai Laravel atau Query Builder.
-    $stmt = $db->prepare($sql);
-    $stmt->execute($parameter);
-    return $stmt;
-}
-
-function ks_satu(PDO $db, string $sql, array $parameter = []): ?array
-{
-    $baris = ks_jalankan($db, $sql, $parameter)->fetch();
-    return $baris === false ? null : $baris;
-}
-
-function ks_pilihan(PDO $db, string $sql, string $kolomId, string $kolomLabel): array
-{
-    $hasil = [];
-    foreach ($db->query($sql)->fetchAll() as $baris) {
-        $hasil[(string) $baris[$kolomId]] = (string) $baris[$kolomLabel];
-    }
-    return $hasil;
-}
-
-function ks_ref(PDO $db, string $jenis): array
-{
-    // Semua query pilihan bersifat tetap, bukan berasal dari input pengguna.
-    switch ($jenis) {
-        case 'satuan': return ks_pilihan($db, 'SELECT idsatuan, nama_satuan FROM v_satuan WHERE status=1 ORDER BY idsatuan', 'idsatuan', 'nama_satuan');
-        case 'role': return ks_pilihan($db, 'SELECT idrole, nama_role FROM v_role ORDER BY idrole', 'idrole', 'nama_role');
-        case 'user': return ks_pilihan($db, 'SELECT iduser, username FROM v_user ORDER BY iduser', 'iduser', 'username');
-        case 'vendor': return ks_pilihan($db, 'SELECT idvendor, nama_vendor FROM v_vendor WHERE status=1 ORDER BY idvendor', 'idvendor', 'nama_vendor');
-        case 'barang': return ks_pilihan($db, 'SELECT idbarang, nama FROM v_barang WHERE status=1 ORDER BY nama', 'idbarang', 'nama');
-        case 'margin': return ks_pilihan($db, "SELECT idmargin_penjualan, CONCAT(persen,'%') AS persen FROM v_margin_penjualan WHERE status=1 ORDER BY idmargin_penjualan", 'idmargin_penjualan', 'persen');
-        case 'pengadaan': return ks_pilihan($db, "SELECT idpengadaan, CONCAT('#',idpengadaan,' - ',nama_vendor) AS nama_vendor FROM v_pengadaan WHERE status IN ('1','2') ORDER BY idpengadaan DESC", 'idpengadaan', 'nama_vendor');
-        case 'penerimaan': return ks_pilihan($db, "SELECT idpenerimaan, CONCAT('#',idpenerimaan,' / Pengadaan #',idpengadaan) AS idpengadaan FROM v_penerimaan WHERE status='1' ORDER BY idpenerimaan DESC", 'idpenerimaan', 'idpengadaan');
-        case 'penjualan': return ks_pilihan($db, 'SELECT idpenjualan, iduser FROM v_penjualan ORDER BY idpenjualan DESC', 'idpenjualan', 'iduser');
-        case 'retur': return ks_pilihan($db, 'SELECT idretur, idpenerimaan FROM v_retur ORDER BY idretur DESC', 'idretur', 'idpenerimaan');
-        case 'detail_penerimaan': return ks_pilihan($db, 'SELECT iddetail_penerimaan, barang_idbarang FROM v_detail_penerimaan ORDER BY iddetail_penerimaan DESC', 'iddetail_penerimaan', 'barang_idbarang');
-        default: throw new InvalidArgumentException('Pilihan referensi tidak dikenal.');
+    wajib_login();
+    if (!izin($halaman, $ubah)) {
+        http_response_code(403);
+        exit('Akses ditolak. <a href="index.php">Kembali ke dashboard</a>');
     }
 }
-
-function ks_form_field(string $nama, string $label, string $tipe, $nilai, array $opsi = [], bool $required = true, int $max = 100): void
+function error_db(Throwable $e): string
 {
-    $idHtml = 'field_' . $nama;
-    echo '<div class="kelola-field"><label for="' . aman($idHtml) . '">' . aman($label) . '</label>';
-    if ($tipe === 'select') {
-        echo '<select id="' . aman($idHtml) . '" name="f[' . aman($nama) . ']" ' . ($required ? 'required' : '') . '>';
-        echo '<option value="">-- Pilih --</option>';
-        foreach ($opsi as $id => $teks) {
-            $selected = (string) $nilai === (string) $id ? ' selected' : '';
-            echo '<option value="' . aman($id) . '"' . $selected . '>' . aman($teks) . '</option>';
-        }
-        echo '</select>';
-    } elseif ($tipe === 'textarea') {
-        echo '<textarea id="' . aman($idHtml) . '" name="f[' . aman($nama) . ']" maxlength="' . $max . '" rows="3" ' . ($required ? 'required' : '') . '>' . aman($nilai) . '</textarea>';
-    } else {
-        $inputType = in_array($tipe, ['number', 'password'], true) ? $tipe : 'text';
-        $attr = $tipe === 'number' ? ' min="0" step="1"' : ' maxlength="' . $max . '"';
-        if ($nama === 'persen') $attr = ' min="0" max="100" step="0.01"';
-        echo '<input id="' . aman($idHtml) . '" type="' . $inputType . '" name="f[' . aman($nama) . ']" value="' . ($tipe === 'password' ? '' : aman($nilai)) . '"' . $attr . ($required ? ' required' : '') . '>';
+    if ($e instanceof PDOException) {
+        $info = $e->errorInfo;
+        $mysqlCode = (int)($info[1] ?? 0);
+        if ($mysqlCode === 1062) return 'Data tersebut sudah ada. Gunakan nilai yang berbeda.';
+        if ($mysqlCode === 1451) return 'Data sedang dipakai oleh tabel lain, sehingga tidak dapat dihapus.';
+        if ($mysqlCode === 1452) return 'Referensi data tidak ditemukan. Periksa pilihan pada formulir.';
+        if ($mysqlCode === 3819) return 'Data tidak memenuhi aturan validasi database.';
+        if ($mysqlCode === 1644) return (string)($info[2] ?? 'Transaksi ditolak oleh database.');
+        return 'Operasi database gagal. Periksa data dan keterkaitan transaksi.';
     }
-    echo '</div>';
+    if ($e instanceof RuntimeException) return $e->getMessage();
+    return 'Terjadi kesalahan saat memproses permintaan.';
 }
-
-function ks_pesan(string $pesan, bool $error = false): void
+function status_chip($value, bool $textOnly = false): string
 {
-    echo '<p class="' . ($error ? 'pesan-error' : 'hasil') . '">' . aman($pesan) . '</p>';
+    $label = (string)$value;
+    $kind = match (strtolower($label)) {
+        'aktif', 'selesai', 'datang', 'lengkap' => 'green',
+        'tidak aktif', 'tidak datang', 'ditolak' => 'gray',
+        'perlu restok', 'melebihi_pesanan' => 'amber',
+        'draft', 'd' => 'blue',
+        'dipesan / proses', 'dipesan', 'dalam proses', 'p' => 'amber',
+        default => 'gray',
+    };
+    if ($textOnly) return $label;
+    return '<span class="chip chip-' . $kind . '">' . e($label) . '</span>';
 }
-
-// Memperbarui total pada pengadaan dan penjualan setelah detail tersimpan.
-function ks_perbarui_total(PDO $db, string $jenis, int $induk): void
+function ikon(string $name, int $size = 20): string
 {
-    if ($jenis === 'pengadaan') {
-        $cek = ks_satu($db, 'SELECT COALESCE(SUM(sub_total), 0) AS total FROM detail_pengadaan WHERE idpengadaan = :id', [':id'=>$induk]);
-        if ((float)$cek['total'] > 2147483647) throw new InvalidArgumentException('Total pengadaan melebihi batas INT.');
-        ks_jalankan($db,
-            'UPDATE pengadaan SET
-                subtotal_nilai = (SELECT COALESCE(SUM(sub_total), 0) FROM detail_pengadaan WHERE idpengadaan = :a),
-                total_nilai = (SELECT COALESCE(SUM(sub_total), 0) FROM detail_pengadaan WHERE idpengadaan = :b) + ppn
-             WHERE idpengadaan = :c', [':a'=>$induk, ':b'=>$induk, ':c'=>$induk]);
-    } elseif ($jenis === 'penjualan') {
-        $cek = ks_satu($db, 'SELECT COALESCE(SUM(subtotal), 0) AS total FROM detail_penjualan WHERE penjualan_idpenjualan = :id', [':id'=>$induk]);
-        if ((float)$cek['total'] > 2147483647) throw new InvalidArgumentException('Total penjualan melebihi batas INT.');
-        ks_jalankan($db,
-            'UPDATE penjualan SET
-                subtotal_nilai = (SELECT COALESCE(SUM(subtotal), 0) FROM detail_penjualan WHERE penjualan_idpenjualan = :a),
-                total_nilai = (SELECT COALESCE(SUM(subtotal), 0) FROM detail_penjualan WHERE penjualan_idpenjualan = :b) + ppn
-             WHERE idpenjualan = :c', [':a'=>$induk, ':b'=>$induk, ':c'=>$induk]);
+    $paths = [
+        'grid' => '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+        'package' => '<path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="M3 8v8l9 5 9-5V8M12 13v8"/>',
+        'cart' => '<circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l3 15h12l3-11H6"/>',
+        'truck' => '<path d="M3 5h11v12H3zM14 9h4l3 4v4h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>',
+        'check' => '<path d="m5 12 4 4L19 6"/>',
+        'back' => '<path d="m15 18-6-6 6-6"/>',
+        'arrow' => '<path d="M5 12h14m-6-6 6 6-6 6"/>',
+        'plus' => '<path d="M12 5v14M5 12h14"/>',
+        'search' => '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+        'logout' => '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+        'users' => '<path d="M16 21v-2a4 4 0 0 0-4-4H4a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+        'layers' => '<path d="m12 2 9 5-9 5-9-5 9-5Zm-9 10 9 5 9-5M3 17l9 5 9-5"/>',
+        'settings' => '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l-1.8 1.8a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6H9a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-1.8-1.8a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1V10a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l1.8-1.8a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 9 4h5a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l1.8 1.8a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1v4a1.7 1.7 0 0 0-1.6 1Z"/>',
+        'wallet' => '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18M7 6V4h12"/>',
+        'clipboard' => '<rect x="5" y="4" width="14" height="18" rx="2"/><path d="M9 2h6v4H9zM9 11h6m-6 4h6"/>',
+        'return' => '<path d="M9 14 4 9l5-5M4 9h9a7 7 0 0 1 0 14h-3"/>',
+        'shield' => '<path d="m12 2 9 4v6c0 5-4 9-9 10C7 21 3 17 3 12V6l9-4Z"/><path d="m9 12 2 2 4-4"/>',
+        'menu' => '<path d="M4 6h16M4 12h16M4 18h16"/>',
+        'edit' => '<path d="m14 4 6 6M3 21l4-1 13-13a2 2 0 0 0-3-3L4 17l-1 4Z"/>',
+        'trash' => '<path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15M10 10v7m4-7v7"/>',
+        'info' => '<circle cx="12" cy="12" r="10"/><path d="M12 11v6M12 7h.01"/>',
+        'calendar' => '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>',
+    ];
+    $body = $paths[$name] ?? $paths['grid'];
+    return '<svg aria-hidden="true" width="' . $size . '" height="' . $size . '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' . $body . '</svg>';
+}
+function field(string $name, string $label, $value = '', string $type = 'text', string $extra = ''): string
+{
+    return '<label class="field"><span>' . e($label) . '</span><input name="' . e($name) . '" type="' . e($type) . '" value="' . e($value) . '" ' . $extra . '></label>';
+}
+function pilihan_field(string $name, string $label, array $options, $selected = null, bool $required = true): string
+{
+    $html = '<label class="field"><span>' . e($label) . '</span><select name="' . e($name) . '" ' . ($required ? 'required' : '') . '>';
+    $html .= '<option value="">Pilih ' . e(strtolower($label)) . '</option>';
+    foreach ($options as $key => $value) {
+        $html .= '<option value="' . e($key) . '" ' . ((string)$key === (string)$selected ? 'selected' : '') . '>' . e($value) . '</option>';
     }
+    return $html . '</select></label>';
 }
-
-
-
-// Baca SP dan tutup seluruh result set agar koneksi bisa digunakan kembali.
-function ks_call(PDO $db, string $sql, array $params=[]): array {
-    $st=ks_jalankan($db,$sql,$params);
-    $rows=$st->columnCount() ? $st->fetchAll() : [];
-    $st->closeCursor();
-    return $rows;
-}
-function ks_status_transaksi(array $data, string $jenis): array {
-    $map=$jenis==='pengadaan' ? ['0'=>'Draft','1'=>'Dipesan','2'=>'Diterima Sebagian','3'=>'Selesai','4'=>'Ditutup'] : ['0'=>'Draft','1'=>'Selesai'];
-    foreach ($data as &$b) $b['status_transaksi']=$map[(string)$b['status']] ?? 'Tidak diketahui';
-    return $data;
-}
-function ks_aktif(PDO $db,string $tabel,int $id): void {
-    $kolom=['barang'=>'idbarang','satuan'=>'idsatuan','vendor'=>'idvendor'];
-    if (!isset($kolom[$tabel])) throw new InvalidArgumentException('Referensi tidak valid.');
-    $b=ks_satu($db,"SELECT status FROM `$tabel` WHERE `{$kolom[$tabel]}`=:id",[':id'=>$id]);
-    if (!$b || (string)$b['status']!=='1') throw new InvalidArgumentException(ucfirst($tabel).' tidak aktif.');
-}
-function ks_final_form(string $jenis,int $id,string $label): void {
-    echo '<form method="post" onsubmit="return confirm(\'Konfirmasi transaksi? Data selesai tidak dapat diedit.\')" action="'.aman($jenis).'.php?tab=detail&amp;id='.$id.'" style="display:inline-block;margin:8px 0"><input type="hidden" name="token" value="'.aman(ks_token()).'"><input type="hidden" name="final_id" value="'.$id.'"><button type="submit">'.aman($label).'</button></form>';
-}
-
-// Semua perubahan detail harus mengunci induk draft dalam transaksi database.
-function ks_kunci_draft(PDO $db, string $jenis, int $id): void {
-    if (!$db->inTransaction()) throw new RuntimeException('Transaksi database belum dimulai.');
-    if (!in_array($jenis,['pengadaan','penerimaan','penjualan','retur'],true)) throw new InvalidArgumentException('Jenis transaksi tidak valid.');
-    $h=ks_satu($db,"SELECT status FROM `$jenis` WHERE `id$jenis`=:id FOR UPDATE",[':id'=>$id]);
-    if (!$h || (string)$h['status']!=='0') throw new RuntimeException('Transaksi sudah dikonfirmasi atau tidak ditemukan.');
+function kosong(string $message = 'Belum ada data.'): string
+{
+    return '<div class="empty">' . ikon('package', 29) . '<p>' . e($message) . '</p></div>';
 }

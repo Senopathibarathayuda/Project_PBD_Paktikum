@@ -1,131 +1,51 @@
 <?php
-require_once __DIR__ . '/includes/fungsi.php';
-// Form Tambah dan Edit Margin Penjualan langsung di halaman ini.
-$aksi = in_array($_GET['aksi'] ?? '', ['baru', 'edit'], true) ? $_GET['aksi'] : '';
-$idEdit = null;
-$nilaiForm = [];
-$errorForm = '';
-$fieldForm = [
-'persen' => ['Persentase Margin', 'number', 0],
-'status' => ['Status', 'select', ['1' => 'Aktif', '0' => 'Tidak aktif']],
-'iduser' => ['Dicatat oleh User', 'ref', 'user']
-];
-
-try {
-    $dbForm = koneksi();
-    if ($aksi === 'edit') {
-        $idEdit = ks_id($_GET['id'] ?? '');
-        $nilaiForm = ks_satu($dbForm, 'SELECT * FROM `margin_penjualan` WHERE idmargin_penjualan = :id', [':id' => $idEdit]) ?? [];
-        if (!$nilaiForm) throw new RuntimeException('Data tidak ditemukan.');
-    }
-
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        ks_cek_token();
-        if ($aksi === '') throw new RuntimeException('Pilih Tambah atau Edit terlebih dahulu.');
-        $f = is_array($_POST['f'] ?? null) ? $_POST['f'] : [];
-        $nilaiForm = $f;
-        $db = $dbForm;
-        $id = $idEdit;
-        $nilai = $nilaiForm;
-                $persen = ks_persen($f['persen'] ?? '');
-                $status = (int) ks_kode($f['status'] ?? '', ['1'=>1,'0'=>1], 'Status');
-                $user = ks_id($f['iduser'] ?? '');
-                // Saat mengaktifkan satu margin, nonaktifkan margin lain dalam satu transaction.
-                $db->exec('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
-                $db->beginTransaction();
-                try {
-                    if ($aksi === 'edit') {
-                        $lama = ks_satu($db, 'SELECT persen FROM margin_penjualan WHERE idmargin_penjualan=:id FOR UPDATE', [':id'=>$idEdit]);
-                        if (!$lama) throw new RuntimeException('Margin tidak ditemukan.');
-                        if ((float)$lama['persen'] !== (float)$persen && ks_satu($db, 'SELECT idpenjualan FROM penjualan WHERE idmargin_penjualan=:id LIMIT 1 FOR UPDATE', [':id'=>$idEdit])) {
-                            throw new InvalidArgumentException('Margin yang sudah dipakai tidak boleh diubah; buat margin baru.');
-                        }
-                    }
-                    if ($aksi === 'edit' && (int) ($nilai['status'] ?? 0) === 0 && $status === 0) {
-                        // Tidak membutuhkan aturan khusus.
-                    }
-                    if ($aksi === 'edit' && $status === 0) {
-                        $cek = ks_satu($db, 'SELECT status FROM margin_penjualan WHERE idmargin_penjualan = :id', [':id'=>$idEdit]);
-                        if ($cek && (int) $cek['status'] === 1) {
-                            throw new InvalidArgumentException('Margin ini sedang aktif. Aktifkan margin lain dahulu agar selalu ada satu yang aktif.');
-                        }
-                    }
-                    if ($aksi === 'baru') {
-                        ks_jalankan($db, 'INSERT INTO margin_penjualan (persen, status, iduser, updated_at) VALUES (:persen, :status, :user, NOW())',
-                            [':persen'=>$persen, ':status'=>0, ':user'=>$user]);
-                        $idEdit=(int)$db->lastInsertId();
-                    } else {
-                        ks_jalankan($db, 'UPDATE margin_penjualan SET persen = :persen, iduser = :user, updated_at = NOW() WHERE idmargin_penjualan = :id',
-                            [':persen'=>$persen, ':user'=>$user, ':id'=>$idEdit]);
-                    }
-                    if ($status===1) ks_call($db,'CALL sp_aktifkan_margin(:id,:user)',[':id'=>$idEdit,':user'=>$user]);
-                    $db->commit();
-                } catch (Throwable $e) {
-                    if ($db->inTransaction()) $db->rollBack();
-                    throw $e;
-                }
-        ks_ke('margin_penjualan.php?hasil=berhasil');
-    }
-} catch (Throwable $e) {
-    if (isset($dbForm) && $dbForm->inTransaction()) $dbForm->rollBack();
-    $errorForm = $e->getMessage();
-}
-
-
+require_once __DIR__ . '/includes/bootstrap.php';
+wajib_izin('margin_penjualan');
+$canWrite = izin('margin_penjualan', true);
+$halaman = 'margin_penjualan';
 $judul = 'Margin Penjualan';
-$data = [];
-$error = '';
-
-// Data diambil dari SQL View (materi Modul 8).
-try {
-    $sql = 'SELECT idmargin_penjualan, created_at, persen, status, iduser, updated_at FROM v_margin_penjualan ORDER BY idmargin_penjualan';
-    $data = koneksi()->query($sql)->fetchAll();
-} catch (PDOException $e) {
-    $error = $e->getMessage();
+$subjudul = 'Satu margin aktif; pergantian menggunakan Stored Procedure.';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    try {
+        wajib_izin('margin_penjualan', true);
+        validasi_csrf();
+        $action = (string)($_POST['action'] ?? '');
+        if ($action === 'create') {
+            $persen = nilai_persen($_POST['persen'] ?? '');
+            db_run('INSERT INTO margin_penjualan (persen, status, iduser) VALUES (?, 0, ?)', [$persen, user_aktif()['iduser']]);
+            flash('success', 'Margin baru tersimpan sebagai tidak aktif.');
+        } elseif ($action === 'edit') {
+            $id = nilai_int($_POST['id'] ?? '', 1);
+            $persen = nilai_persen($_POST['persen'] ?? '');
+            $old = db_one('SELECT status FROM margin_penjualan WHERE idmargin_penjualan = ?', [$id]);
+            if (!$old || (int)$old['status'] === 1) throw new RuntimeException('Nonaktifkan margin terlebih dahulu dengan mengaktifkan margin lain.');
+            db_run('UPDATE margin_penjualan SET persen = ?, iduser = ?, updated_at = NOW() WHERE idmargin_penjualan = ?', [$persen, user_aktif()['iduser'], $id]);
+            flash('success', 'Persentase margin diperbarui.');
+        } elseif ($action === 'activate') {
+            $id = nilai_int($_POST['id'] ?? '', 1);
+            $stmt = $pdo->prepare('CALL sp_aktifkan_margin(?, ?)');
+            $stmt->execute([$id, (int)user_aktif()['iduser']]);
+            $stmt->closeCursor();
+            flash('success', 'Margin aktif berhasil diganti melalui Stored Procedure.');
+        } else throw new RuntimeException('Aksi tidak dikenal.');
+        pergi('margin_penjualan.php');
+    } catch (Throwable $e) {
+        flash('error', error_db($e));
+        pergi('margin_penjualan.php');
+    }
 }
-
-$kolom = [
-    'idmargin_penjualan' => 'ID Margin',
-    'created_at' => 'Dibuat',
-    'persen' => 'Persen',
-    'status' => 'Status',
-    'iduser' => 'ID User',
-    'updated_at' => 'Diperbarui',
-];
+$filter = in_array((string)($_GET['status'] ?? ''), ['1','0'], true) ? (string)$_GET['status'] : '';
+$viewName = $filter === '1' ? 'v_margin_penjualan_aktif' : ($filter === '0' ? 'v_margin_penjualan_nonaktif' : 'v_margin_penjualan');
+$rows = db_all("SELECT * FROM {$viewName} ORDER BY idmargin_penjualan DESC");
+$edit = isset($_GET['edit']) ? db_one('SELECT * FROM margin_penjualan WHERE idmargin_penjualan = ?', [(int)$_GET['edit']]) : null;
+$headAction = $canWrite ? '<a href="margin_penjualan.php?add=1" class="btn btn-primary">' . ikon('plus',18) . ' Tambah margin</a>' : '';
 require __DIR__ . '/includes/header.php';
 ?>
-<div class="atas-halaman"><h1>Data Margin Penjualan</h1><a class="tombol" href="index.php">Kembali</a></div>
-<?php if (isset($_GET['hasil'])) ks_pesan('Data berhasil disimpan.'); ?>
-<?php if ($errorForm !== '') ks_pesan($errorForm, true); ?>
-<div class="baris-tindakan">
-    <a class="tombol" href="margin_penjualan.php?aksi=baru">+ Tambah Margin Penjualan</a>
-    <?php if ($aksi !== ''): ?><a class="tombol" href="margin_penjualan.php">Batal</a><?php endif; ?>
-</div>
-<?php if ($aksi !== '' && $errorForm === ''): ?>
-<section class="form-di-halaman" id="form-data">
-    <h2><?= $aksi === 'baru' ? 'Tambah' : 'Edit' ?> Margin Penjualan</h2>
-    <form class="kelola-form" method="post" action="margin_penjualan.php?aksi=<?= aman($aksi) ?><?= $idEdit !== null ? '&amp;id=' . (int)$idEdit : '' ?>">
-        <input type="hidden" name="token" value="<?= aman(ks_token()) ?>">
-        <div class="kelola-grid">
-        <?php foreach ($fieldForm as $nama => $field):
-            [$label, $tipe, $opsi] = $field;
-            $pilihan = $tipe === 'ref' ? ks_ref($dbForm, $opsi) : ($tipe === 'select' ? $opsi : []);
-            $awal = $nilaiForm[$nama] ?? ($nama === 'status' ? '0' : '');
-            if ($nama === 'password') $awal = '';
-            $wajib = !($nama === 'password' && $aksi === 'edit');
-            ks_form_field($nama, $label, $tipe === 'ref' ? 'select' : $tipe, $awal, $pilihan, $wajib, is_int($opsi) && $opsi > 0 ? $opsi : 100);
-        endforeach; ?>
-        </div>
-        <button type="submit">Simpan</button>
-        <a class="tombol" href="margin_penjualan.php">Batal</a>
-    </form>
-</section>
-<?php endif; ?>
-
-<?php
-if ($error !== '') {
-    pesan_error($error);
-} else {
-    tampil_tabel($data, $kolom, '', [['pk'=>'idmargin_penjualan', 'label'=>'Edit', 'url'=>'margin_penjualan.php?aksi=edit&id=']]);
-}
-require __DIR__ . '/includes/footer.php';
+<div class="page-grid <?= ($canWrite && (isset($_GET['add']) || $edit)) ? 'with-form' : '' ?>"><section class="surface-card"><div class="card-top"><div><h2>Riwayat margin</h2></div><form method="get"><select class="status-filter" name="status" aria-label="Filter status margin" onchange="this.form.submit()"><option value="">Semua status</option><option value="1" <?= $filter==='1'?'selected':'' ?>>Aktif</option><option value="0" <?= $filter==='0'?'selected':'' ?>>Nonaktif</option></select></form></div>
+<div class="table-wrap"><table class="data-table"><thead><tr><th>ID</th><th>Margin</th><th>Status</th><th>Diatur oleh</th><th>Dibuat</th><th>Diperbarui</th><?php if ($canWrite): ?><th>Aksi</th><?php endif; ?></tr></thead><tbody>
+<?php foreach ($rows as $r): ?><tr><td>#<?= (int)$r['idmargin_penjualan'] ?></td><td class="num-strong"><?= e($r['persen']) ?>%</td><td><?= status_chip($r['status_label']) ?></td><td><?= e($r['username']) ?></td><td><?= e(tanggal($r['created_at'])) ?></td><td><?= e(tanggal($r['updated_at'])) ?></td>
+<?php if ($canWrite): ?><td class="td-actions"><div class="row-actions">
+<?php if ((int)$r['status'] !== 1): ?><a class="btn btn-text btn-sm" href="margin_penjualan.php?edit=<?= (int)$r['idmargin_penjualan'] ?>">Edit</a><form method="post" class="inline-form" data-confirm="Jadikan margin ini aktif untuk penjualan baru?"><?= csrf_field() ?><input type="hidden" name="action" value="activate"><input type="hidden" name="id" value="<?= (int)$r['idmargin_penjualan'] ?>"><button type="submit" class="btn btn-text btn-sm">Aktifkan</button></form><?php else: ?><span class="muted mini">Digunakan sekarang</span><?php endif; ?></div></td><?php endif; ?></tr><?php endforeach; ?>
+</tbody></table></div><?php if (!$rows) echo kosong('Belum ada margin.'); ?><div class="card-note">Margin aktif tidak dapat diedit langsung. Aktifkan margin lain terlebih dahulu agar histori penjualan tetap konsisten.</div></section>
+<?php if ($canWrite && (isset($_GET['add']) || $edit)): ?><aside class="surface-card editor-panel"><div class="card-top"><div><h2><?= $edit ? 'Edit margin' : 'Margin baru' ?></h2></div><a href="margin_penjualan.php" class="icon-btn">×</a></div><form class="editor-form" method="post"><?= csrf_field() ?><input type="hidden" name="action" value="<?= $edit ? 'edit' : 'create' ?>"><input type="hidden" name="id" value="<?= (int)($edit['idmargin_penjualan'] ?? 0) ?>"><?= field('persen','Persentase margin (%)',$edit['persen'] ?? '10.00','number','min="0" max="100" step="0.01" required') ?><div class="form-actions"><a class="btn btn-outline" href="margin_penjualan.php">Batal</a><button type="submit" class="btn btn-primary">Simpan</button></div></form></aside><?php endif; ?></div>
+<?php require __DIR__ . '/includes/footer.php'; ?>
